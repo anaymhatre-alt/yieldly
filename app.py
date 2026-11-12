@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import calendar
+from pathlib import Path
 
 import altair as alt
 import pandas as pd
@@ -10,7 +11,7 @@ import streamlit as st
 from cotton_fuzzy import CottonFuzzyModel, ModelParams, Scenario
 from cotton_fuzzy.rainfall import kharif_rainfall_total, prepare_rainfall_csv
 
-st.set_page_config(page_title="Kharif Cotton Yield Fuzzy Estimator", page_icon="🌱", layout="wide")
+st.set_page_config(page_title="Vidarbha Cotton Yield Fuzzy Estimator", page_icon="🌱", layout="wide")
 
 IRRIGATION_METHODS = {"Drip (about 90%)": 0.90, "Sprinkler (about 75%)": 0.75, "Furrow or surface (about 60%)": 0.60, "Custom": None}
 SOIL_TYPES = {"Light or sandy (about 70 mm)": 70.0, "Loam (about 120 mm)": 120.0, "Clay loam (about 150 mm)": 150.0,
@@ -25,13 +26,13 @@ with st.sidebar:
 
 model = CottonFuzzyModel(ModelParams(potential_yield_t_ha=float(ymax), water_requirement_mm=float(etc), rainfall_effectiveness=float(reff)))
 
-st.title("🌱 Kharif Cotton Yield Fuzzy Estimator")
-st.caption("Hierarchical Sugeno fuzzy model with water, temperature and soil rules. Rainfall can be loaded from a Kharif CSV dataset.")
+st.title("🌱 Vidarbha Kharif Cotton Yield Fuzzy Estimator")
+st.caption("Hierarchical Sugeno fuzzy model for cotton yield scenarios in Vidarbha, using regional rainfall, irrigation, temperature and soil inputs.")
 
-rain_source = st.radio("Rainfall input", ["Upload rainfall CSV", "Enter manually"], horizontal=True)
+rain_source = st.radio("Rainfall input", ["Built-in Vidarbha dataset", "Upload rainfall CSV", "Enter manually"], horizontal=True)
 rain = None
 rain_summary = None
-if rain_source == "Upload rainfall CSV":
+if rain_source != "Enter manually":
     season_a, season_b = st.columns(2)
     with season_a:
         season_start = st.selectbox("Kharif starts", range(1, 13), index=5, format_func=lambda m: calendar.month_name[m])
@@ -40,13 +41,28 @@ if rain_source == "Upload rainfall CSV":
         default_end = 9 if 9 in season_end_options else season_end_options[-1]
         season_end = st.selectbox("Kharif ends", season_end_options, index=season_end_options.index(default_end), format_func=lambda m: calendar.month_name[m])
     st.caption("Default is June–September. Adjust the months to match the local cotton calendar.")
-    uploaded_rainfall = st.file_uploader("Upload daily or monthly rainfall CSV", type=["csv"])
-    st.caption("Accepted formats: Date + rainfall_mm; Year + Month + rainfall_mm; or Year with Jan–Dec columns. Optional location: District, Location, Station, or Subdivision.")
-    st.markdown("Official rainfall data catalog: [data.gov.in](https://data.gov.in/catalog/rainfall)")
-    if uploaded_rainfall is not None:
+    rainfall_frame = None
+    if rain_source == "Built-in Vidarbha dataset":
+        dataset_path = Path(__file__).with_name("vidarbha_rainfall_monthly.csv")
         try:
-            uploaded_rainfall.seek(0)
-            rainfall_frame = prepare_rainfall_csv(pd.read_csv(uploaded_rainfall))
+            rainfall_frame = prepare_rainfall_csv(pd.read_csv(dataset_path))
+            st.caption("Built-in data: IMD Pune monthly actual rainfall for the Vidarbha meteorological subdivision. It is a regional figure, not district-level or farm-gauge rainfall.")
+            st.markdown("Source: [IMD Pune — Vidarbha rainfall data](https://imdpune.gov.in/cmpg/subdivrainfall/vidarbha.html)")
+        except (OSError, ValueError, pd.errors.ParserError) as exc:
+            st.error(f"Could not load the included Vidarbha rainfall dataset: {exc}")
+    else:
+        uploaded_rainfall = st.file_uploader("Upload daily or monthly rainfall CSV", type=["csv"])
+        st.caption("Accepted formats: Date + rainfall_mm; Year + Month + rainfall_mm; or Year with Jan–Dec columns. Optional location: District, Location, Station, or Subdivision.")
+        st.markdown("Official rainfall data catalog: [data.gov.in](https://data.gov.in/catalog/rainfall)")
+        if uploaded_rainfall is not None:
+            try:
+                uploaded_rainfall.seek(0)
+                rainfall_frame = prepare_rainfall_csv(pd.read_csv(uploaded_rainfall))
+            except (ValueError, pd.errors.ParserError, UnicodeDecodeError) as exc:
+                st.error(f"Could not use this CSV: {exc}")
+
+    if rainfall_frame is not None:
+        try:
             available_years = sorted(rainfall_frame["date"].dt.year.unique().tolist(), reverse=True)
             selected_year = st.selectbox("Rainfall year", available_years)
             selected_location = None
@@ -74,7 +90,7 @@ else:
 
 c1, c2, c3 = st.columns(3)
 area = c1.number_input("Field area (ha)", min_value=0.1, max_value=100000.0, value=1.0, step=0.5)
-if rain_source == "Upload rainfall CSV":
+if rain_source != "Enter manually":
     c2.metric("Rainfall supplied to model", f"{rain:.1f} mm" if rain is not None else "Upload a dataset")
 else:
     c2.write("Rainfall entered manually above")
