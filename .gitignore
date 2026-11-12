@@ -1,8 +1,11 @@
 __pycache__/
 *.pyc
 .venv/
+.idea/
+_original_code/
 venv/
 .pytest_cache/
+_report_render_qa/
 .streamlit/secrets.toml
 *.egg-info/
 .DS_Store

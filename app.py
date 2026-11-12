@@ -1,13 +1,16 @@
 """Streamlit front end for the fuzzy cotton yield model."""
 from __future__ import annotations
 
+import calendar
+
 import altair as alt
 import pandas as pd
 import streamlit as st
 
 from cotton_fuzzy import CottonFuzzyModel, ModelParams, Scenario
+from cotton_fuzzy.rainfall import kharif_rainfall_total, prepare_rainfall_csv
 
-st.set_page_config(page_title="Cotton Yield Fuzzy Estimator", page_icon="🌱", layout="wide")
+st.set_page_config(page_title="Kharif Cotton Yield Fuzzy Estimator", page_icon="🌱", layout="wide")
 
 IRRIGATION_METHODS = {"Drip (about 90%)": 0.90, "Sprinkler (about 75%)": 0.75, "Furrow or surface (about 60%)": 0.60, "Custom": None}
 SOIL_TYPES = {"Light or sandy (about 70 mm)": 70.0, "Loam (about 120 mm)": 120.0, "Clay loam (about 150 mm)": 150.0,
@@ -22,13 +25,66 @@ with st.sidebar:
 
 model = CottonFuzzyModel(ModelParams(potential_yield_t_ha=float(ymax), water_requirement_mm=float(etc), rainfall_effectiveness=float(reff)))
 
-st.title("🌱 Cotton Yield Fuzzy Estimator")
-st.caption("Hierarchical Sugeno fuzzy model with water, temperature and soil rules.")
+st.title("🌱 Kharif Cotton Yield Fuzzy Estimator")
+st.caption("Hierarchical Sugeno fuzzy model with water, temperature and soil rules. Rainfall can be loaded from a Kharif CSV dataset.")
+
+rain_source = st.radio("Rainfall input", ["Upload rainfall CSV", "Enter manually"], horizontal=True)
+rain = None
+rain_summary = None
+if rain_source == "Upload rainfall CSV":
+    season_a, season_b = st.columns(2)
+    with season_a:
+        season_start = st.selectbox("Kharif starts", range(1, 13), index=5, format_func=lambda m: calendar.month_name[m])
+    with season_b:
+        season_end_options = list(range(season_start, 13))
+        default_end = 9 if 9 in season_end_options else season_end_options[-1]
+        season_end = st.selectbox("Kharif ends", season_end_options, index=season_end_options.index(default_end), format_func=lambda m: calendar.month_name[m])
+    st.caption("Default is June–September. Adjust the months to match the local cotton calendar.")
+    uploaded_rainfall = st.file_uploader("Upload daily or monthly rainfall CSV", type=["csv"])
+    st.caption("Accepted formats: Date + rainfall_mm; Year + Month + rainfall_mm; or Year with Jan–Dec columns. Optional location: District, Location, Station, or Subdivision.")
+    st.markdown("Official rainfall data catalog: [data.gov.in](https://data.gov.in/catalog/rainfall)")
+    if uploaded_rainfall is not None:
+        try:
+            uploaded_rainfall.seek(0)
+            rainfall_frame = prepare_rainfall_csv(pd.read_csv(uploaded_rainfall))
+            available_years = sorted(rainfall_frame["date"].dt.year.unique().tolist(), reverse=True)
+            selected_year = st.selectbox("Rainfall year", available_years)
+            selected_location = None
+            if "location" in rainfall_frame:
+                locations = sorted(rainfall_frame["location"].dropna().unique().tolist())
+                if locations:
+                    selected_location = st.selectbox("Rainfall location", locations)
+            selected = rainfall_frame[
+                (rainfall_frame["date"].dt.year == selected_year)
+                & rainfall_frame["date"].dt.month.between(season_start, season_end)
+            ]
+            if selected_location is not None:
+                selected = selected[selected["location"] == selected_location]
+            rain, records = kharif_rainfall_total(rainfall_frame, selected_year, season_start, season_end, selected_location)
+            rain_summary = f"{rain:.1f} mm from {records} records in {selected_year}"
+            st.metric("Accumulated Kharif rainfall", f"{rain:.1f} mm")
+            st.caption(f"Using {records} dataset records for {calendar.month_name[season_start]}–{calendar.month_name[season_end]} {selected_year}.")
+            monthly_rain = selected.groupby(selected["date"].dt.month)["rainfall_mm"].sum()
+            monthly_rain.index = [calendar.month_abbr[int(month)] for month in monthly_rain.index]
+            st.bar_chart(monthly_rain)
+        except (ValueError, pd.errors.ParserError, UnicodeDecodeError) as exc:
+            st.error(f"Could not use this CSV: {exc}")
+else:
+    rain = st.number_input("Kharif rainfall, whole season (mm)", min_value=0.0, max_value=5000.0, value=650.0, step=25.0)
 
 c1, c2, c3 = st.columns(3)
 area = c1.number_input("Field area (ha)", min_value=0.1, max_value=100000.0, value=1.0, step=0.5)
-rain = c2.number_input("Rainfall, whole season (mm)", min_value=0.0, max_value=4000.0, value=650.0, step=25.0)
+if rain_source == "Upload rainfall CSV":
+    c2.metric("Rainfall supplied to model", f"{rain:.1f} mm" if rain is not None else "Upload a dataset")
+else:
+    c2.write("Rainfall entered manually above")
 irr = c3.number_input("Irrigation applied, whole season (mm)", min_value=0.0, max_value=3000.0, value=200.0, step=25.0)
+
+if rain is None:
+    st.info("Upload a CSV with rainfall records, or select manual entry to continue.")
+    st.stop()
+if rain_summary:
+    st.caption(f"Selected rainfall input: {rain_summary}.")
 
 d1, d2 = st.columns(2)
 method = d1.selectbox("Irrigation method", list(IRRIGATION_METHODS))
